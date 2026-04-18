@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Моя Касса</title>
+    <style>
+        :root {
+            --primary: #4F46E5;
+            --bg: #F3F4F6;
+            --card: #FFFFFF;
+            --text: #1F2937;
+            --danger: #EF4444;
+            --success: #10B981;
+        }
+        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+        body { margin: 0; background-color: var(--bg); color: var(--text); padding-bottom: 80px; }
+        
+        .screen { display: none; padding: 20px; }
+        .screen.active { display: block; animation: fadeIn 0.3s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        h1, h2, h3 { margin-top: 0; }
+        .card { background: var(--card); padding: 15px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-bottom: 15px; }
+        
+        input, button { width: 100%; padding: 12px; margin-bottom: 10px; border: 1px solid #D1D5DB; border-radius: 8px; font-size: 16px; outline: none; }
+        input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.2); }
+        
+        .flex-row { display: flex; gap: 10px; }
+        .flex-row input { flex: 1; }
+        
+        button { background-color: var(--primary); color: white; border: none; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        button:active { transform: scale(0.98); }
+        button.danger { background-color: var(--danger); }
+        button.success { background-color: var(--success); }
+        button.secondary { background-color: #E5E7EB; color: var(--text); }
+        
+        .qty-controls { display: flex; align-items: center; justify-content: space-between; background: #F9FAFB; border-radius: 8px; padding: 5px; margin-bottom: 10px;}
+        .qty-controls button { width: 40px; margin: 0; padding: 8px; background: white; color: var(--text); border: 1px solid #E5E7EB;}
+        .qty-controls span { font-weight: bold; font-size: 18px; }
+
+        .receipt-item { display: flex; justify-content: space-between; border-bottom: 1px dashed #E5E7EB; padding: 10px 0; }
+        .receipt-item:last-child { border-bottom: none; }
+        .receipt-total { font-size: 20px; font-weight: bold; text-align: right; margin: 10px 0; color: var(--primary); }
+        
+        .note-list { font-size: 14px; color: #4B5563; }
+        .note-list li { margin-bottom: 5px; }
+    </style>
+</head>
+<body>
+
+    <div id="screen-start" class="screen active">
+        <div class="card" style="margin-top: 20vh; text-align: center;">
+            <h2>Открытие смены</h2>
+            <p>Введите сумму наличных в кассе</p>
+            <input type="number" id="start-cash" placeholder="Сумма в рублях" inputmode="decimal">
+            <button onclick="startShift()" class="success">Начать смену</button>
+        </div>
+    </div>
+
+    <div id="screen-pos" class="screen">
+        <div class="card">
+            <h3 style="margin-bottom: 5px;">Новая позиция</h3>
+            <input type="text" id="item-name" placeholder="Название товара" list="catalog-list" oninput="checkCatalog()">
+            <datalist id="catalog-list"></datalist>
+            
+            <input type="number" id="item-price" placeholder="Цена за 1 шт." inputmode="decimal">
+            
+            <div class="qty-controls">
+                <button onclick="changeQty(-1)" class="danger">-</button>
+                <span id="item-qty">1</span> шт.
+                <button onclick="changeQty(1)" class="success">+</button>
+            </div>
+            
+            <button onclick="addItem()">Добавить в чек</button>
+        </div>
+
+        <div class="card">
+            <h3>Текущий чек</h3>
+            <div id="receipt-list">
+                <div style="color: #9CA3AF; text-align: center; padding: 10px;">Чек пуст</div>
+            </div>
+            <div class="receipt-total" id="receipt-total">Итого: 0 руб.</div>
+        </div>
+
+        <div class="card">
+            <h3>Управление чеком</h3>
+            <div class="flex-row">
+                <input type="number" id="discount" placeholder="Скидка %" inputmode="decimal">
+                <button onclick="applyDiscount()" class="secondary" style="width: 100px;">Применить</button>
+            </div>
+            <div class="flex-row">
+                <input type="text" id="note-text" placeholder="Заметка...">
+                <button onclick="addNote()" class="secondary" style="width: 100px;">Добавить</button>
+            </div>
+            <ul id="notes-list" class="note-list"></ul>
+        </div>
+
+        <button onclick="finishReceipt()" class="danger">Закрыть чек и посмотреть отчет</button>
+    </div>
+
+    <div id="screen-report" class="screen">
+        <div class="card">
+            <h2>Отчет по чеку/смене</h2>
+            <p><strong>Время начала:</strong> <span id="rep-start-time"></span></p>
+            <p><strong>Время закрытия:</strong> <span id="rep-end-time"></span></p>
+            <hr>
+            <p><strong>Было в кассе:</strong> <span id="rep-start-cash"></span> руб.</p>
+            <p><strong>Продано на сумму:</strong> <span id="rep-sales"></span> руб.</p>
+            <p><strong>Скидка:</strong> <span id="rep-discount"></span> руб.</p>
+            <hr>
+            <h3 style="color: var(--success);">ОЖИДАЕМАЯ НАЛИЧКА: <span id="rep-final-cash"></span> руб.</h3>
+            
+            <div id="rep-notes-container" style="display: none;">
+                <hr>
+                <strong>Заметки:</strong>
+                <ul id="rep-notes-list" class="note-list"></ul>
+            </div>
+        </div>
+        <button onclick="resetApp()" class="success">Начать новый чек</button>
+    </div>
+
+    <script>
+        // База данных в браузере
+        let catalog = JSON.parse(localStorage.getItem('kassaCatalog')) || {};
+        
+        // Переменные смены
+        let initialCash = 0;
+        let startTime = "";
+        let currentQty = 1;
+        let receipt = [];
+        let discountPercent = 0;
+        let notes = [];
+
+        function updateCatalogList() {
+            const list = document.getElementById('catalog-list');
+            list.innerHTML = '';
+            for (let name in catalog) {
+                let option = document.createElement('option');
+                option.value = name;
+                list.appendChild(option);
+            }
+        }
+
+        function checkCatalog() {
+            const name = document.getElementById('item-name').value.trim().toLowerCase();
+            const priceInput = document.getElementById('item-price');
+            if (catalog[name]) {
+                priceInput.value = catalog[name]; // Автоподстановка цены
+            }
+        }
+
+        function switchScreen(screenId) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(screenId).classList.add('active');
+        }
+
+        function startShift() {
+            const cashInput = document.getElementById('start-cash').value;
+            initialCash = parseFloat(cashInput) || 0;
+            const now = new Date();
+            startTime = now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            
+            updateCatalogList();
+            switchScreen('screen-pos');
+        }
+
+        function changeQty(amount) {
+            currentQty += amount;
+            // Позволяем уходить в минус для возвратов
+            document.getElementById('item-qty').innerText = currentQty;
+        }
+
+        function addItem() {
+            const nameInput = document.getElementById('item-name');
+            const priceInput = document.getElementById('item-price');
+            const name = nameInput.value.trim().toLowerCase();
+            const price = parseFloat(priceInput.value);
+
+            if (!name || isNaN(price)) {
+                alert("Введите название и цену!");
+                return;
+            }
+
+            // Сохраняем в память телефона
+            if (!catalog[name] || catalog[name] !== price) {
+                catalog[name] = price;
+                localStorage.setItem('kassaCatalog', JSON.stringify(catalog));
+                updateCatalogList();
+            }
+
+            receipt.push({
+                name: name,
+                price: price,
+                qty: currentQty,
+                total: price * currentQty
+            });
+
+            // Сброс формы ввода
+            nameInput.value = '';
+            priceInput.value = '';
+            currentQty = 1;
+            document.getElementById('item-qty').innerText = currentQty;
+            
+            renderReceipt();
+        }
+
+        function renderReceipt() {
+            const list = document.getElementById('receipt-list');
+            list.innerHTML = '';
+            let total = 0;
+
+            if (receipt.length === 0) {
+                list.innerHTML = '<div style="color: #9CA3AF; text-align: center; padding: 10px;">Чек пуст</div>';
+            }
+
+            receipt.forEach((item, index) => {
+                total += item.total;
+                const type = item.qty < 0 ? "<span style='color:var(--danger)'>[Возврат]</span>" : "";
+                list.innerHTML += `
+                    <div class="receipt-item">
+                        <div>
+                            <strong>${item.name}</strong> ${type}<br>
+                            <span style="font-size:12px; color:#6B7280">${item.price} x ${item.qty} шт.</span>
+                        </div>
+                        <div>${item.total} руб.</div>
+                    </div>
+                `;
+            });
+
+            document.getElementById('receipt-total').innerText = `Итого: ${total} руб.`;
+        }
+
+        function applyDiscount() {
+            const discInput = document.getElementById('discount').value;
+            discountPercent = parseFloat(discInput) || 0;
+            alert(`Скидка ${discountPercent}% применена.`);
+        }
+
+        function addNote() {
+            const text = document.getElementById('note-text').value.trim();
+            if (text) {
+                notes.push(text);
+                const li = document.createElement('li');
+                li.innerText = text;
+                document.getElementById('notes-list').appendChild(li);
+                document.getElementById('note-text').value = '';
+            }
+        }
+
+        function finishReceipt() {
+            if(receipt.length === 0 && notes.length === 0) {
+                if(!confirm("Чек пуст. Вы уверены, что хотите завершить?")) return;
+            }
+
+            let subtotal = receipt.reduce((sum, item) => sum + item.total, 0);
+            let discountAmount = subtotal * (discountPercent / 100);
+            let totalSales = subtotal - discountAmount;
+            let finalCash = initialCash + totalSales;
+
+            const now = new Date();
+            document.getElementById('rep-start-time').innerText = startTime;
+            document.getElementById('rep-end-time').innerText = now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            document.getElementById('rep-start-cash').innerText = initialCash.toFixed(2);
+            document.getElementById('rep-sales').innerText = subtotal.toFixed(2);
+            document.getElementById('rep-discount').innerText = discountAmount.toFixed(2);
+            document.getElementById('rep-final-cash').innerText = finalCash.toFixed(2);
+
+            if (notes.length > 0) {
+                document.getElementById('rep-notes-container').style.display = 'block';
+                const notesList = document.getElementById('rep-notes-list');
+                notesList.innerHTML = '';
+                notes.forEach(n => {
+                    notesList.innerHTML += `<li>${n}</li>`;
+                });
+            } else {
+                document.getElementById('rep-notes-container').style.display = 'none';
+            }
+
+            switchScreen('screen-report');
+        }
+
+        function resetApp() {
+            // Для нового чека обновляем начальную кассу до фактической, чтобы продолжить смену
+            let subtotal = receipt.reduce((sum, item) => sum + item.total, 0);
+            let discountAmount = subtotal * (discountPercent / 100);
+            initialCash = initialCash + (subtotal - discountAmount);
+            
+            receipt = [];
+            discountPercent = 0;
+            notes = [];
+            
+            document.getElementById('discount').value = '';
+            document.getElementById('notes-list').innerHTML = '';
+            
+            renderReceipt();
+            switchScreen('screen-pos');
+        }
+    </script>
+</body>
+</html>
