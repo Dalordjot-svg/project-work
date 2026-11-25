@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: coffeeman-schedule
+    runtime: docker
+    plan: starter
+    branch: main
+    dockerfilePath: ./coffeeman/Dockerfile
+    dockerContext: ./coffeeman
+    healthCheckPath: /healthz
+    buildFilter:
+      paths:
+        - coffeeman/**
+        - render.yaml
+    disk:
+      name: coffeeman-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: CALENDAR_BIND
+        value: "0.0.0.0"
+      - key: DB_PATH
+        value: /data/schedule.sqlite3
+      - key: BOT_TIMEZONE
+        value: Asia/Novosibirsk

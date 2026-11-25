@@ -174,7 +174,7 @@ def main():
     zone = ZoneInfo(os.getenv("BOT_TIMEZONE", "Asia/Novosibirsk"))
     db_path = os.getenv("DB_PATH", "schedule.sqlite3")
     db = open_database(db_path)
-    public_url = os.getenv("SCHEDULE_BASE_URL", "").rstrip("/")
+    public_url = (os.getenv("SCHEDULE_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL", "")).rstrip("/")
     if public_url and not public_url.startswith("https://"):
         raise ValueError("SCHEDULE_BASE_URL must use HTTPS")
     start_calendar(db_path, zone, os.getenv("CALENDAR_BIND", "127.0.0.1"),
