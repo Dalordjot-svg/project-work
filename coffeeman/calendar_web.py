@@ -1,17 +1,100 @@
 import calendar
 import html
+import hmac
+import json
 import re
 import sqlite3
+import time
 from contextlib import closing
 from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 
 MONTHS = ("Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
           "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь")
 DAYS = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+
+APP_PAGE = """<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>График смен COFFEEMAN</title>
+<style>
+body{margin:0;background:#f6f4f0;color:#271d17;font:1rem/1.5 'Segoe UI',sans-serif}
+header{background:#2a211b;color:white;padding:1rem;font-weight:800;letter-spacing:.12em}
+main{max-width:50rem;margin:auto;padding:1rem}
+</style>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head><body><header>COFFEEMAN</header><main>
+<h1>Ты новенький?</h1>
+<p>Открой календарь кнопкой «Расписание» в рабочем чате Telegram.</p>
+</main><script>
+const app = window.Telegram?.WebApp;
+const main = document.querySelector('main');
+let busy = false;
+async function showMonth(month = '') {
+    if (busy) return;
+    busy = true;
+    try {
+        const reply = await fetch('/api/calendar', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({initData: app.initData, month})
+        });
+        if (!reply.ok) {
+            const heading = document.createElement('h1');
+            const detail = document.createElement('p');
+            heading.textContent = reply.status === 503 ? 'Календарь временно недоступен' : 'Ты новенький?';
+            detail.textContent = reply.status === 403
+                ? 'Для просмотра календаря вступи в рабочий чат COFFEEMAN.'
+                : 'Заново открой «Расписание» в рабочем чате Telegram.';
+            main.replaceChildren(heading, detail);
+            return;
+        }
+        const page = new DOMParser().parseFromString(await reply.text(), 'text/html');
+        if (!document.querySelector('#calendar-style')) {
+            const style = page.querySelector('style');
+            style.id = 'calendar-style';
+            document.head.append(style);
+        }
+        main.replaceChildren(...page.querySelector('main').childNodes);
+    } catch {
+        window.alert('Календарь временно недоступен. Попробуй открыть его ещё раз.');
+    } finally {
+        busy = false;
+    }
+}
+main.addEventListener('click', (event) => {
+    const link = event.target.closest('a[href^="?month="]');
+    if (!link) return;
+    event.preventDefault();
+    showMonth(new URL(link.href).searchParams.get('month'));
+});
+if (app?.initData) {
+    app.ready();
+    showMonth();
+}
+</script></body></html>"""
+
+
+def telegram_identity(init_data, bot_token, now):
+    if not isinstance(init_data, str) or not init_data or len(init_data) > 12000:
+        raise ValueError
+    fields = dict(parse_qsl(init_data, strict_parsing=True, max_num_fields=30))
+    supplied_hash = fields.pop("hash", "")
+    check = "\n".join(f"{key}={value}" for key, value in sorted(fields.items()))
+    key = hmac.digest(b"WebAppData", bot_token.encode(), "sha256")
+    expected_hash = hmac.digest(key, check.encode(), "sha256").hex()
+    if not re.fullmatch(r"[a-f0-9]{64}", supplied_hash) or not hmac.compare_digest(supplied_hash, expected_hash):
+        raise ValueError
+    if not 0 <= now - int(fields.get("auth_date", "0")) <= 3600:
+        raise ValueError
+    user = json.loads(fields.get("user", "{}"))
+    token = fields.get("start_param", "")
+    if not isinstance(user, dict) or type(user.get("id")) is not int or not re.fullmatch(r"[A-Za-z0-9_-]{43}", token):
+        raise ValueError
+    return user["id"], token
 
 
 def month_start(value, today):
@@ -88,30 +171,50 @@ li{{margin-top:.35rem;padding:.4rem;background:#eee5d9;border-radius:.34rem;over
 <div class="agenda">{''.join(agenda)}</div></main></body></html>"""
 
 
-def start_calendar(db_path, zone, bind, port):
+def start_calendar(db_path, zone, bind, port, bot_token, group_member):
     class CalendarHandler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
             # Access URLs contain a group secret.
             pass
 
         def do_GET(self):
-            url = urlsplit(self.path)
-            match = re.fullmatch(r"/schedule/([A-Za-z0-9_-]{43})", url.path)
-            if url.path == "/healthz":
+            path = urlsplit(self.path).path
+            if path == "/healthz":
                 self.respond(200, "ok", "text/plain")
                 return
-            if not match:
+            status = 200 if path in {"/", "/app"} else 404
+            self.respond(status, APP_PAGE, "text/html")
+
+        def do_POST(self):
+            if self.path != "/api/calendar":
                 self.respond(404, "Ссылка недоступна.", "text/plain")
                 return
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+                if not 0 < size <= 16000:
+                    raise ValueError
+                payload = json.loads(self.rfile.read(size))
+                if not isinstance(payload, dict):
+                    raise ValueError
+                user_id, token = telegram_identity(payload.get("initData"), bot_token, time.time())
+            except (ValueError, TypeError):
+                self.respond(401, "Открой расписание через Telegram.", "text/plain")
+                return
             today = datetime.now(zone).date()
-            month = month_start(parse_qs(url.query).get("month", [""])[0], today)
+            value = payload.get("month")
+            month = month_start(value if isinstance(value, str) else "", today)
             end = date(month.year + (month.month == 12), month.month % 12 + 1, 1)
             with closing(sqlite3.connect(db_path)) as db:
-                allowed = db.execute(
-                    "SELECT 1 FROM schedule_links WHERE token = ?", (match[1],)
+                group = db.execute(
+                    "SELECT chat_id FROM schedule_links WHERE token = ?", (token,)
                 ).fetchone()
+                try:
+                    allowed = group and group_member(group[0], user_id)
+                except (OSError, RuntimeError):
+                    self.respond(503, "Проверка Telegram временно недоступна.", "text/plain")
+                    return
                 if not allowed:
-                    self.respond(404, "Ссылка недоступна.", "text/plain")
+                    self.respond(403, "Расписание доступно участникам рабочего чата.", "text/plain")
                     return
                 shifts = db.execute(
                     "SELECT s.day, s.starts, s.ends, e.name FROM shifts s "

@@ -155,7 +155,7 @@ def calendar_reply(db, message, admins, public_url):
     link = db.execute("SELECT token FROM schedule_links WHERE chat_id = ?", (chat["id"],)).fetchone()
     if not link:
         return "Администратору нужно подключить расписание командой /schedule_on.", None
-    return "График смен COFFEEMAN", f"{public_url}/schedule/{link[0]}"
+    return "График смен COFFEEMAN", f"https://t.me/CoffeemanShiftsBot?startapp={link[0]}"
 
 
 def send_reply(token, chat_id, reply, markup=None):
@@ -165,6 +165,13 @@ def send_reply(token, chat_id, reply, markup=None):
         options = {"reply_markup": markup} if markup else {}
         api(token, "sendMessage", chat_id=chat_id, text=reply[:split], **options)
         reply = reply[split:].lstrip("\n")
+
+
+def is_group_member(token, chat_id, user_id):
+    member = api(token, "getChatMember", chat_id=chat_id, user_id=user_id)
+    return member["status"] in {"creator", "administrator", "member"} or (
+        member["status"] == "restricted" and member.get("is_member", False)
+    )
 
 
 def main():
@@ -178,7 +185,8 @@ def main():
     if public_url and not public_url.startswith("https://"):
         raise ValueError("SCHEDULE_BASE_URL must use HTTPS")
     start_calendar(db_path, zone, os.getenv("CALENDAR_BIND", "127.0.0.1"),
-                   int(os.getenv("PORT", "8765")))
+                   int(os.getenv("PORT", "8765")), token,
+                   lambda chat_id, user_id: is_group_member(token, chat_id, user_id))
     offset = 0
     while True:
         try:
